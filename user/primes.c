@@ -43,7 +43,7 @@ void process(int left_fd) {
         // first pass
         if (my_prime == 0) {
             my_prime = passed_num;
-            printf("prime %d\n", num);
+            printf("prime %d\n", my_prime);
         }
 
         if (passed_num % my_prime != 0) {
