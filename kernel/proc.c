@@ -127,6 +127,9 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // init trace mask
+  p->tracemask = 0;
+
   return p;
 }
 
@@ -150,6 +153,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->tracemask = 0;
 }
 
 // Create a user page table for a given process,
@@ -274,6 +278,7 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  np->tracemask =  p->tracemask;
 
   np->parent = p;
 
