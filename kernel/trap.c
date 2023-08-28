@@ -77,8 +77,24 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    int interval = (uint64)p->alarm_interval;
+    uint64 handler = p->alarm_handler;
+
+    if ((interval == 0) && (handler == 0))
+      goto yield;
+    
+    if ((interval == p->ticks_passed) && (p->alarm_hdler_called == 0)) {
+      memmove(p->alarm_saved_tf, p->trapframe, sizeof(p->alarm_saved_tf));
+      p->ticks_passed = 0;
+      p->trapframe->epc = handler;
+      p->alarm_hdler_called = 1;
+    }
+    else
+      p->ticks_passed++;
+yield:
     yield();
+  }
 
   usertrapret();
 }
