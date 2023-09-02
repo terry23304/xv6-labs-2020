@@ -311,7 +311,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -320,13 +319,14 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+    // disable PTE_W and set PTE_C
+    if (flags & PTE_W) {
+      *pte = (*pte & ~PTE_W) | PTE_C;
+      flags = (flags & ~PTE_W) | PTE_C;
     }
+    if(mappages(new, i, PGSIZE, pa, flags) != 0)
+      goto err;
+    refcntinr((void *)pa);
   }
   return 0;
 
@@ -358,6 +358,21 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if (va0 >= MAXVA) {
+      printf("copyout: va exceeds MAXVA\n");
+      return -1;
+    }
+    pte_t *pte = walk(pagetable, va0, 0);
+    if (pte == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_V) == 0) {
+      printf("copyout: invalid pte\n");
+      return -1;
+    }
+    if ((*pte & PTE_W) == 0) {
+      // write destination is read-only, copy on write
+      if (cowalloc(pagetable, va0) < 0) {
+        return -1;
+      }
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -439,4 +454,33 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+// allocate a new page with kalloc(), copy the old page to the new page
+// and install the new page in the PTE with PTE_W set.
+int cowalloc(pagetable_t pagetable, uint64 va)
+{
+  if (va >= MAXVA)
+    return -1;
+
+  pte_t *pte = walk(pagetable, va, 0);
+  if (pte == 0)
+    panic("cowalloc: pte should exist");
+  if (((*pte & PTE_V) == 0) || ((*pte & PTE_U) == 0))
+    panic("cowalloc: page not valid or not user page");
+
+  if (*pte & PTE_C) {
+    uint64 new_page = (uint64)kalloc();
+    if (new_page == 0) {
+      printf("cowalloc: kalloc failed\n");
+      return -1;
+    }
+
+    uint64 old_page = PTE2PA(*pte);
+    memmove((void *)new_page, (void *)old_page, PGSIZE);
+    kfree((void *)old_page);  // free when ref count is 0
+    *pte = (PA2PTE(new_page) | PTE_FLAGS(*pte) | PTE_W) & ~PTE_C;
+  }
+  
+  return 0;
 }
