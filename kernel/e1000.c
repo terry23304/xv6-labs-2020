@@ -102,7 +102,29 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
-  
+
+  acquire(&e1000_lock);
+  int offset = regs[E1000_TDT];
+
+  // last transmit not finished yet.
+  if ((tx_ring[offset].status & E1000_TXD_STAT_DD) == 0) {
+    release(&e1000_lock);
+    return -1;
+  }
+
+  // release memory of last frame
+  if(tx_mbufs[offset])
+    mbuffree(tx_mbufs[offset]);
+
+  // set the new frame pointer in tx_ring
+  tx_mbufs[offset] = m;
+  tx_ring[offset].addr = (uint64)m->head;
+  tx_ring[offset].length = (uint16)m->len;
+  tx_ring[offset].cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  // set tail
+  regs[E1000_TDT] = (offset + 1) % TX_RING_SIZE;
+
+  release(&e1000_lock);
   return 0;
 }
 
@@ -115,6 +137,24 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+  while(1) {
+    acquire(&e1000_lock);
+
+    int offset = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+    if ((rx_ring[offset].status & E1000_RXD_STAT_DD) == 0)
+      return;
+
+    rx_mbufs[offset]->len = rx_ring[offset].length;
+    net_rx(rx_mbufs[offset]);
+    
+    rx_mbufs[offset] = mbufalloc(0);
+    rx_ring[offset].status = 0;
+    rx_ring[offset].addr = (uint64)rx_mbufs[offset]->head;
+    regs[E1000_RDT] = offset;
+
+    release(&e1000_lock);
+  }
 }
 
 void
